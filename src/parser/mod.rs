@@ -1,7 +1,6 @@
 use crate::token::{Lexer, Token};
 
 pub type Program = Vec<Stmt>;
-
 #[derive(PartialEq, Debug, Eq, Clone)]
 pub enum Stmt {
     LetStmt(Ident, Expr),
@@ -103,7 +102,7 @@ impl<'a> Parser<'a> {
             Token::Gt => Precedence::LessGreater,
             Token::Plus | Token::Minus => Precedence::Sum,
             Token::Slash | Token::Asterisk => Precedence::Product,
-            Token::LBrace => Precedence::Index,
+            Token::LBracket => Precedence::Index,
             Token::LParen => Precedence::Call,
             _ => Precedence::Lowest,
         }
@@ -153,7 +152,7 @@ impl<'a> Parser<'a> {
             Some(Token::Gt) => Precedence::LessGreater,
             Some(Token::Plus) | Some(Token::Minus) => Precedence::Sum,
             Some(Token::Slash) | Some(Token::Asterisk) => Precedence::Product,
-            Some(Token::LBrace) => Precedence::Index,
+            Some(Token::LBracket) => Precedence::Index,
             Some(Token::LParen) => Precedence::Call,
             _ => Precedence::Lowest,
         };
@@ -165,7 +164,7 @@ impl<'a> Parser<'a> {
             Some(Token::Gt) => Precedence::LessGreater,
             Some(Token::Plus) | Some(Token::Minus) => Precedence::Sum,
             Some(Token::Slash) | Some(Token::Asterisk) => Precedence::Product,
-            Some(Token::LBrace) => Precedence::Index,
+            Some(Token::LBracket) => Precedence::Index,
             Some(Token::LParen) => Precedence::Call,
             _ => Precedence::Lowest,
         };
@@ -198,6 +197,18 @@ impl<'a> Parser<'a> {
         }
         return None;
     }
+    fn parse_string_expr(&mut self) -> Option<Expr> {
+        if let Some(curr_token) = self.curr_token.clone() {
+            return match curr_token {
+                Token::String(string) => {
+                    Some(Expr::LitExpr(Literal::StringLiteral(string.clone())))
+                }
+                _ => None,
+            };
+        }
+        return None;
+    }
+
     fn parse_bool_expr(&mut self) -> Option<Expr> {
         if let Some(curr_token) = self.curr_token.clone() {
             return match curr_token {
@@ -238,7 +249,7 @@ impl<'a> Parser<'a> {
             None => return None,
         };
 
-        if !self.peek_token_is(&Token::RBrace) {
+        if !self.expect_peek(&Token::RBracket) {
             return None;
         }
 
@@ -401,14 +412,23 @@ impl<'a> Parser<'a> {
 
         return Some(Expr::FnExpr { params, body });
     }
+    fn parse_array_expr(&mut self) -> Option<Expr> {
+        return match self.parse_expr_list(Token::RBracket) {
+            Some(list) => Some(Expr::ArrayExpr(list)),
+            None => None,
+        };
+    }
 
     fn parse_expr(&mut self, precedence: Precedence) -> Option<Expr> {
         let mut left = match self.curr_token {
             Some(Token::Identifier(_)) => self.parse_ident_expr(),
             Some(Token::Int(_)) => self.parse_int_expr(),
+            Some(Token::String(_)) => self.parse_string_expr(),
             Some(Token::True) | Some(Token::False) => self.parse_bool_expr(),
             Some(Token::Bang) | Some(Token::Minus) | Some(Token::Plus) => self.parse_prefix_expr(),
             Some(Token::LParen) => self.parse_grouped_expr(),
+            Some(Token::LBracket) => self.parse_array_expr(),
+            Some(Token::LBrace) => self.parse_array_expr(),
             Some(Token::If) => self.parse_if_expr(),
             Some(Token::Function) => self.parse_function_expr(),
             _ => None,
@@ -427,7 +447,7 @@ impl<'a> Parser<'a> {
                     self.next_token();
                     left = self.parse_infix_expr(left.unwrap());
                 }
-                Some(Token::LBrace) => {
+                Some(Token::LBracket) => {
                     self.next_token();
                     left = self.parse_index_expr(left.unwrap());
                 }
@@ -516,6 +536,19 @@ mod test {
 
     use super::{Expr, Ident, Infix, Lexer, Literal, Parser, Prefix, Program, Stmt};
     use pretty_assertions::assert_eq;
+
+    #[test]
+    fn test_string_statements() {
+        let input = "\"hello world\"";
+
+        let lexer = Lexer::new(input);
+        let mut parser = Parser::new(lexer);
+        let program = parser.parse_program();
+        let expected: Program = vec![Stmt::ExprStmt(Expr::LitExpr(Literal::StringLiteral(
+            "hello world".to_owned(),
+        )))];
+        assert_eq!(program, expected);
+    }
 
     #[test]
     fn test_let_statements() {
@@ -1058,6 +1091,155 @@ return 993322;";
                 ),
             ],
         })];
+        assert_eq!(program, expected);
+    }
+    #[test]
+    fn test_array_expressions() {
+        let input = "
+        [1, 2 * 2, 3 + 3];
+        a * [1, 2, 3, 4][b * c] * d;
+        add(a * b[2], b[1], 2 * [1, 2][1]);
+        ";
+        let lexer = Lexer::new(input);
+        let mut parser = Parser::new(lexer);
+        let program = parser.parse_program();
+        let expected = vec![
+            Stmt::ExprStmt(Expr::ArrayExpr(vec![
+                Expr::LitExpr(Literal::IntLiteral(1)),
+                Expr::InfixExpr(
+                    Infix::Multiply,
+                    Box::new(Expr::LitExpr(Literal::IntLiteral(2))),
+                    Box::new(Expr::LitExpr(Literal::IntLiteral(2))),
+                ),
+                Expr::InfixExpr(
+                    Infix::Plus,
+                    Box::new(Expr::LitExpr(Literal::IntLiteral(3))),
+                    Box::new(Expr::LitExpr(Literal::IntLiteral(3))),
+                ),
+            ])),
+            Stmt::ExprStmt(Expr::InfixExpr(
+                Infix::Multiply,
+                Box::new(Expr::InfixExpr(
+                    Infix::Multiply,
+                    Box::new(Expr::IdentExpr(Ident(String::from("a")))),
+                    Box::new(Expr::IndexExpr {
+                        array: Box::new(Expr::ArrayExpr(vec![
+                            Expr::LitExpr(Literal::IntLiteral(1)),
+                            Expr::LitExpr(Literal::IntLiteral(2)),
+                            Expr::LitExpr(Literal::IntLiteral(3)),
+                            Expr::LitExpr(Literal::IntLiteral(4)),
+                        ])),
+                        index: Box::new(Expr::InfixExpr(
+                            Infix::Multiply,
+                            Box::new(Expr::IdentExpr(Ident(String::from("b")))),
+                            Box::new(Expr::IdentExpr(Ident(String::from("c")))),
+                        )),
+                    }),
+                )),
+                Box::new(Expr::IdentExpr(Ident(String::from("d")))),
+            )),
+            Stmt::ExprStmt(Expr::CallExpr {
+                function: Box::new(Expr::IdentExpr(Ident(String::from("add")))),
+                arguments: vec![
+                    Expr::InfixExpr(
+                        Infix::Multiply,
+                        Box::new(Expr::IdentExpr(Ident(String::from("a")))),
+                        Box::new(Expr::IndexExpr {
+                            array: Box::new(Expr::IdentExpr(Ident(String::from("b")))),
+                            index: Box::new(Expr::LitExpr(Literal::IntLiteral(2))),
+                        }),
+                    ),
+                    Expr::IndexExpr {
+                        array: Box::new(Expr::IdentExpr(Ident(String::from("b")))),
+                        index: Box::new(Expr::LitExpr(Literal::IntLiteral(1))),
+                    },
+                    Expr::InfixExpr(
+                        Infix::Multiply,
+                        Box::new(Expr::LitExpr(Literal::IntLiteral(2))),
+                        Box::new(Expr::IndexExpr {
+                            array: Box::new(Expr::ArrayExpr(vec![
+                                Expr::LitExpr(Literal::IntLiteral(1)),
+                                Expr::LitExpr(Literal::IntLiteral(2)),
+                            ])),
+                            index: Box::new(Expr::LitExpr(Literal::IntLiteral(1))),
+                        }),
+                    ),
+                ],
+            }),
+        ];
+        assert_eq!(program, expected);
+    }
+    #[test]
+    fn test_array_expressions() {
+        let input = "
+        ";
+        let lexer = Lexer::new(input);
+        let mut parser = Parser::new(lexer);
+        let program = parser.parse_program();
+        let expected = vec![
+            Stmt::ExprStmt(Expr::ArrayExpr(vec![
+                Expr::LitExpr(Literal::IntLiteral(1)),
+                Expr::InfixExpr(
+                    Infix::Multiply,
+                    Box::new(Expr::LitExpr(Literal::IntLiteral(2))),
+                    Box::new(Expr::LitExpr(Literal::IntLiteral(2))),
+                ),
+                Expr::InfixExpr(
+                    Infix::Plus,
+                    Box::new(Expr::LitExpr(Literal::IntLiteral(3))),
+                    Box::new(Expr::LitExpr(Literal::IntLiteral(3))),
+                ),
+            ])),
+            Stmt::ExprStmt(Expr::InfixExpr(
+                Infix::Multiply,
+                Box::new(Expr::InfixExpr(
+                    Infix::Multiply,
+                    Box::new(Expr::IdentExpr(Ident(String::from("a")))),
+                    Box::new(Expr::IndexExpr {
+                        array: Box::new(Expr::ArrayExpr(vec![
+                            Expr::LitExpr(Literal::IntLiteral(1)),
+                            Expr::LitExpr(Literal::IntLiteral(2)),
+                            Expr::LitExpr(Literal::IntLiteral(3)),
+                            Expr::LitExpr(Literal::IntLiteral(4)),
+                        ])),
+                        index: Box::new(Expr::InfixExpr(
+                            Infix::Multiply,
+                            Box::new(Expr::IdentExpr(Ident(String::from("b")))),
+                            Box::new(Expr::IdentExpr(Ident(String::from("c")))),
+                        )),
+                    }),
+                )),
+                Box::new(Expr::IdentExpr(Ident(String::from("d")))),
+            )),
+            Stmt::ExprStmt(Expr::CallExpr {
+                function: Box::new(Expr::IdentExpr(Ident(String::from("add")))),
+                arguments: vec![
+                    Expr::InfixExpr(
+                        Infix::Multiply,
+                        Box::new(Expr::IdentExpr(Ident(String::from("a")))),
+                        Box::new(Expr::IndexExpr {
+                            array: Box::new(Expr::IdentExpr(Ident(String::from("b")))),
+                            index: Box::new(Expr::LitExpr(Literal::IntLiteral(2))),
+                        }),
+                    ),
+                    Expr::IndexExpr {
+                        array: Box::new(Expr::IdentExpr(Ident(String::from("b")))),
+                        index: Box::new(Expr::LitExpr(Literal::IntLiteral(1))),
+                    },
+                    Expr::InfixExpr(
+                        Infix::Multiply,
+                        Box::new(Expr::LitExpr(Literal::IntLiteral(2))),
+                        Box::new(Expr::IndexExpr {
+                            array: Box::new(Expr::ArrayExpr(vec![
+                                Expr::LitExpr(Literal::IntLiteral(1)),
+                                Expr::LitExpr(Literal::IntLiteral(2)),
+                            ])),
+                            index: Box::new(Expr::LitExpr(Literal::IntLiteral(1))),
+                        }),
+                    ),
+                ],
+            }),
+        ];
         assert_eq!(program, expected);
     }
 }

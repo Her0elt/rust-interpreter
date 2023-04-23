@@ -1,7 +1,7 @@
 use std::{cell::RefCell, rc::Rc};
 
 use crate::{
-    evaluator::{env::Env, Evaluator, Object},
+    evaluator::{builtins::new_builtins, env::Env, Evaluator, Object},
     parser::{Parser, Stmt},
     token::{Lexer, Token},
 };
@@ -17,7 +17,7 @@ impl Repl {
         let lex = Lexer::new(line);
         let mut parser = Parser::new(lex);
         let program = parser.parse_program();
-        let env = Rc::new(RefCell::new(Env::new()));
+        let env = Rc::new(RefCell::new(Env::from(new_builtins())));
         let mut evaluator = Evaluator::new(env);
         return evaluator.eval(program);
     }

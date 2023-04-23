@@ -1,18 +1,83 @@
-use std::{cell::RefCell, rc::Rc};
+use std::{array, cell::RefCell, rc::Rc, fmt, collections::HashMap};
 
 use crate::parser::{Expr, Ident, Infix, Literal, Prefix, Program, Stmt};
-
+use std::hash::{Hash, Hasher};
 use self::env::Env;
+pub mod builtins;
 pub mod env;
 
-#[derive(PartialEq, Debug, Eq, Clone)]
+pub type BuiltinFunc = fn(Vec<Object>) -> Object;
+
+#[derive(PartialEq, Debug, Clone)]
 pub enum Object {
     Int(i64),
     Bool(bool),
+    String(String),
     NULL,
+    Array(Vec<Object>),
+    Hash(HashMap<Object, Object>),
     ReturnValue(Box<Object>),
     Error(String),
     Func(Vec<Ident>, Program, Rc<RefCell<Env>>),
+    Builtin(i32, BuiltinFunc),
+}
+impl fmt::Display for Object {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match *self {
+            Object::Int(ref value) => write!(f, "{}", value),
+            Object::String(ref value) => write!(f, "{}", value),
+            Object::Bool(ref value) => write!(f, "{}", value),
+            Object::Array(ref objects) => {
+                let mut result = String::new();
+                for (i, obj) in objects.iter().enumerate() {
+                    if i < 1 {
+                        result.push_str(&format!("{}", obj));
+                    } else {
+                        result.push_str(&format!(", {}", obj));
+                    }
+                }
+                write!(f, "[{}]", result)
+            }
+            Object::Hash(ref hash) => {
+                let mut result = String::new();
+                for (i, (k, v)) in hash.iter().enumerate() {
+                    if i < 1 {
+                        result.push_str(&format!("{}: {}", k, v));
+                    } else {
+                        result.push_str(&format!(", {}: {}", k, v));
+                    }
+                }
+                write!(f, "{{{}}}", result)
+            }
+            Object::Func(ref params, _, _) => {
+                let mut result = String::new();
+                for (i, Ident(ref s)) in params.iter().enumerate() {
+                    if i < 1 {
+                        result.push_str(&format!("{}", s));
+                    } else {
+                        result.push_str(&format!(", {}", s));
+                    }
+                }
+                write!(f, "fn({}) {{ ... }}", result)
+            }
+            Object::Builtin(_, _) => write!(f, "[builtin function]"),
+            Object::NULL => write!(f, "null"),
+            Object::ReturnValue(ref value) => write!(f, "{}", value),
+            Object::Error(ref value) => write!(f, "{}", value),
+        }
+    }
+}
+impl Eq for Object {}
+
+impl Hash for Object {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        match *self {
+            Object::Int(ref i) => i.hash(state),
+            Object::Bool(ref b) => b.hash(state),
+            Object::String(ref s) => s.hash(state),
+            _ => "".hash(state),
+        }
+    }
 }
 
 #[derive(PartialEq, Debug, Eq, Clone)]
@@ -88,6 +153,15 @@ impl Evaluator {
             _ => Self::error(format!("type mismatch: {:?} {:?} {:?}", left, infix, right)),
         }
     }
+    fn eval_infix_string_expr(&mut self, infix: Infix, left: String, right: String) -> Object {
+        match infix {
+            Infix::Plus => Object::String(format!("{}{}", left, right)),
+            _ => Object::Error(String::from(format!(
+                "unknown operator: {:?} {:?} {:?}",
+                left, infix, right
+            ))),
+        }
+    }
     fn eval_infix_expr(&mut self, infix: Infix, left: Object, right: Object) -> Object {
         match left {
             Object::Int(left_value) => {
@@ -102,6 +176,16 @@ impl Evaluator {
                     self.eval_infix_bool_expr(infix, left_value, right_value)
                 } else {
                     Self::error(format!("type mismatch: {:?} {:?} {:?}", left, infix, right))
+                }
+            }
+            Object::String(left_value) => {
+                if let Object::String(right_value) = right {
+                    self.eval_infix_string_expr(infix, left_value, right_value)
+                } else {
+                    Self::error(format!(
+                        "type mismatch: {:?} {:?} {:?}",
+                        left_value, infix, right
+                    ))
                 }
             }
             _ => Self::error(format!(
@@ -132,7 +216,8 @@ impl Evaluator {
     fn eval_lit(&self, lit: Literal) -> Object {
         return match lit {
             Literal::IntLiteral(int) => Object::Int(int),
-            Literal::BoolLiteral(int) => Object::Bool(int),
+            Literal::BoolLiteral(bool) => Object::Bool(bool),
+            Literal::StringLiteral(string) => Object::String(string),
             _ => Object::NULL,
         };
     }
@@ -152,17 +237,17 @@ impl Evaluator {
 
         let (params, body, env) = match self.eval_expr(*func) {
             Some(Object::Func(params, body, env)) => (params, body, env),
-            // Some(Object::Builtin(expect_param_num, f)) => {
-            //     if expect_param_num < 0 || expect_param_num == args.len() as i32 {
-            //         return f(args);
-            //     } else {
-            //         return Self::error(format!(
-            //             "wrong number of arguments. got={}, want={}",
-            //             args.len(),
-            //             expect_param_num,
-            //         ));
-            //     }
-            // }
+            Some(Object::Builtin(expect_param_num, f)) => {
+                if expect_param_num < 0 || expect_param_num == args.len() as i32 {
+                    return f(args);
+                } else {
+                    return Self::error(format!(
+                        "wrong number of arguments. got={}, want={}",
+                        args.len(),
+                        expect_param_num,
+                    ));
+                }
+            }
             Some(o) => return Self::error(format!("{:?} is not valid function", o)),
             None => return Object::NULL,
         };
@@ -194,6 +279,46 @@ impl Evaluator {
             None => Object::NULL,
         }
     }
+    fn eval_index_expr(&mut self, left: Object, index: Object) -> Object {
+        match left {
+            Object::Array(ref array) => {
+                if let Object::Int(i) = index {
+                    self.eval_array_index_expr(array.clone(), i)
+                } else {
+                    Self::error(format!("index operator not supported: {:?}", left))
+                }
+            }
+            // Object::Hash(ref hash) => match index {
+            //     Object::Int(_) | Object::Bool(_) | Object::String(_) => match hash.get(&index) {
+            //         Some(o) => o.clone(),
+            //         None => Object::NULL,
+            //     },
+            //     Object::Error(_) => index,
+            //     _ => Self::error(format!("unusable as hash key: {:?}", index)),
+            // },
+            _ => Self::error(format!("uknown operator: {:?} {:?}", left, index)),
+        }
+    }
+    fn eval_array_index_expr(&mut self, array: Vec<Object>, index: i64) -> Object {
+        let max = array.len() as i64;
+
+        if index < 0 || index > max {
+            return Object::NULL;
+        }
+
+        match array.get(index as usize) {
+            Some(o) => o.clone(),
+            None => Object::NULL,
+        }
+    }
+    fn eval_array_expr(&mut self, objects: Vec<Expr>) -> Object {
+        Object::Array(
+            objects
+                .iter()
+                .map(|e| self.eval_expr(e.clone()).unwrap_or(Object::NULL))
+                .collect::<Vec<_>>(),
+        )
+    }
 
     fn eval_expr(&mut self, expr: Expr) -> Option<Object> {
         return match expr {
@@ -206,6 +331,7 @@ impl Evaluator {
                     None
                 }
             }
+            Expr::ArrayExpr(list) => Some(self.eval_array_expr(list)),
             Expr::InfixExpr(infix, left_expr, right_expr) => {
                 let left = self.eval_expr(*left_expr);
                 let right = self.eval_expr(*right_expr);
@@ -225,7 +351,15 @@ impl Evaluator {
                 function,
                 arguments,
             } => Some(self.eval_call_expr(function, arguments)),
-
+            Expr::IndexExpr { array, index } => {
+                let array = self.eval_expr(*array);
+                let index = self.eval_expr(*index);
+                if array.is_some() && index.is_some() {
+                    Some(self.eval_index_expr(array.unwrap(), index.unwrap()))
+                } else {
+                    None
+                }
+            }
             _ => None,
         };
     }
@@ -294,14 +428,14 @@ mod test {
         token::Lexer,
     };
 
-    use super::{env::Env, Evaluator, Object};
+    use super::{builtins::new_builtins, env::Env, Evaluator, Object};
     use pretty_assertions::assert_eq;
 
     fn test(input: &str) -> Option<Object> {
         let lexer = Lexer::new(input);
         let mut parser = Parser::new(lexer);
         let program = parser.parse_program();
-        let env = Rc::new(RefCell::new(Env::new()));
+        let env = Rc::new(RefCell::new(Env::from(new_builtins())));
         let mut eval = Evaluator::new(env);
         let output = eval.eval(program);
         return output;
@@ -333,6 +467,22 @@ mod test {
         let expected = vec![
             ("true", Some(Object::Bool(true))),
             ("false", Some(Object::Bool(false))),
+        ];
+        for (input, value) in expected {
+            assert_eq!(test(input), value);
+        }
+    }
+    #[test]
+    fn test_eval_string() {
+        let expected = vec![
+            (
+                "\"hello world\"",
+                Some(Object::String("hello world".to_owned())),
+            ),
+            (
+                "\"hello\" + \" \" + \"world\"",
+                Some(Object::String("hello world".to_owned())),
+            ),
         ];
         for (input, value) in expected {
             assert_eq!(test(input), value);
@@ -431,7 +581,7 @@ mod test {
                     Box::new(Expr::IdentExpr(Ident(String::from("x")))),
                     Box::new(Expr::LitExpr(Literal::IntLiteral(2))),
                 ))],
-                Rc::new(RefCell::new(Env::new())),
+                Rc::new(RefCell::new(Env::from(new_builtins()))),
             )),
         )];
         for (input, value) in expected {
@@ -469,6 +619,87 @@ mod test {
                 addTwo(2);",
                 Some(Object::Int(4)),
             ),
+        ];
+        for (input, value) in expected {
+            assert_eq!(test(input), value);
+        }
+    }
+    #[test]
+    fn test_eval_builtins() {
+        let expected = vec![
+            ("len(\"\")", Some(Object::Int(0))),
+            ("len(\"four\")", Some(Object::Int(4))),
+            ("len(\"hello world\")", Some(Object::Int(11))),
+             ("first([1, 2, 3])", Some(Object::Int(1))),
+            ("first([])", Some(Object::NULL)),
+            ("last([1, 2, 3])", Some(Object::Int(3))),
+            ("last([])", Some(Object::NULL)),
+            (
+                "rest([1, 2, 3, 4])",
+                Some(Object::Array(vec![
+                    Object::Int(2),
+                    Object::Int(3),
+                    Object::Int(4),
+                ])),
+            ),
+            (
+                "rest([2, 3, 4])",
+                Some(Object::Array(vec![Object::Int(3), Object::Int(4)])),
+            ),
+            ("rest([4])", Some(Object::Array(vec![]))),
+            ("rest([])", Some(Object::NULL)),
+            // push
+            (
+                "push([1, 2, 3], 4)",
+                Some(Object::Array(vec![
+                    Object::Int(1),
+                    Object::Int(2),
+                    Object::Int(3),
+                    Object::Int(4),
+                ])),
+            ),
+            ("push([], 1)", Some(Object::Array(vec![Object::Int(1)]))),
+            (
+                "let a = [1]; push(a, 2); a",
+                Some(Object::Array(vec![Object::Int(1)])),
+            ),
+        ];
+        for (input, value) in expected {
+            assert_eq!(test(input), value);
+        }
+    }
+    #[test]
+    fn test_eval_array() {
+        let expected = vec![(
+            "[1, 2 * 2, 3 + 3]",
+            Some(Object::Array(vec![
+                Object::Int(1),
+                Object::Int(4),
+                Object::Int(6),
+            ])),
+        )];
+        for (input, value) in expected {
+            assert_eq!(test(input), value);
+        }
+    }
+    #[test]
+    fn test_eval_index() {
+        let expected = vec![
+            ("[1, 2, 3][0]", Some(Object::Int(1))),
+            ("[1, 2, 3][1]", Some(Object::Int(2))),
+            ("let i = 0; [1][i]", Some(Object::Int(1))),
+            ("[1, 2, 3][1 + 1];", Some(Object::Int(3))),
+            ("let myArray = [1, 2, 3]; myArray[2];", Some(Object::Int(3))),
+            (
+                "let myArray = [1, 2, 3]; myArray[0] + myArray[1] + myArray[2];",
+                Some(Object::Int(6)),
+            ),
+            (
+                "let myArray = [1, 2, 3]; let i = myArray[0]; myArray[i];",
+                Some(Object::Int(2)),
+            ),
+            ("[1, 2, 3][3]", Some(Object::NULL)),
+            ("[1, 2, 3][-1]", Some(Object::NULL)),
         ];
         for (input, value) in expected {
             assert_eq!(test(input), value);

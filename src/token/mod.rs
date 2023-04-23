@@ -6,14 +6,18 @@ pub enum Token {
     EOF,
     Int(i64),
     Identifier(String),
+    String(String),
     Assign,
     Plus,
     Comma,
+    Colon,
     Semicolon,
     LParen,
     RParen,
     LBrace,
     RBrace,
+    LBracket,
+    RBracket,
     Function,
     Let,
     True,
@@ -94,8 +98,11 @@ impl<'a> Iterator for Lexer<'a> {
                 ')' => return Some(Token::RParen),
                 '{' => return Some(Token::LBrace),
                 '}' => return Some(Token::RBrace),
+                '[' => return Some(Token::LBracket),
+                ']' => return Some(Token::RBracket),
                 ',' => return Some(Token::Comma),
                 ';' => return Some(Token::Semicolon),
+                ':' => return Some(Token::Colon),
                 '-' => return Some(Token::Minus),
                 '!' => {
                     if let Some(next_char) = self.peek() {
@@ -110,7 +117,20 @@ impl<'a> Iterator for Lexer<'a> {
                 '*' => return Some(Token::Asterisk),
                 '<' => return Some(Token::Lt),
                 '>' => return Some(Token::Gt),
-
+                '\"' => {
+                    if let Some(start) = self.read_char() {
+                        if start != '\"' {
+                            let string = self
+                                .keep_reading(start, |c| *c != '\"')
+                                .into_iter()
+                                .collect();
+                            self.read_char();
+                            return Some(Token::String(string));
+                        }
+                        return Some(Token::String("".to_owned()));
+                    }
+                    return None;
+                }
                 _ => {
                     if token.is_alphabetic() {
                         let ident = self.keep_reading(token, |c| c.is_ascii_alphabetic());
@@ -207,7 +227,6 @@ let result = add(five, ten);";
         let output = Lexer::new(input).into_iter().collect::<Vec<Token>>();
         assert_eq!(output, expected);
     }
-}
 #[test]
 fn test_lexer_2() {
     let input = "!-/*5;
@@ -248,11 +267,37 @@ fn test_lexer_3() {
     let output = Lexer::new(input).into_iter().collect::<Vec<Token>>();
     assert_eq!(output, expected);
 }
-#[test]
-fn test_lexer_4() {
-    let input = "return 5;";
-    let expected = vec![Token::Return, Token::Int(5), Token::Semicolon];
-
-    let output = Lexer::new(input).into_iter().collect::<Vec<Token>>();
-    assert_eq!(output, expected);
+    #[test]
+    fn test_lexer_4() {
+        let input = "\"foobar\"";
+        let expected = vec![Token::String("foobar".to_owned())];
+        let output = Lexer::new(input).into_iter().collect::<Vec<Token>>();
+        assert_eq!(output, expected);
+    }
+    #[test]
+    fn test_lexer_5() {
+        let input = "[1,2]";
+        let expected = vec![
+            Token::LBracket,
+            Token::Int(1),
+            Token::Comma,
+            Token::Int(2),
+            Token::RBracket,
+        ];
+        let output = Lexer::new(input).into_iter().collect::<Vec<Token>>();
+        assert_eq!(output, expected);
+    }
+    #[test]
+    fn test_lexer_6() {
+        let input = "{\"foo\": \"bar\"}";
+        let expected = vec![
+            Token::LBrace,
+            Token::String("foo".to_owned()),
+            Token::Colon,
+            Token::String("bar".to_owned()),
+            Token::RBrace,
+        ];
+        let output = Lexer::new(input).into_iter().collect::<Vec<Token>>();
+        assert_eq!(output, expected);
+    }
 }
