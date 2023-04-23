@@ -1,10 +1,10 @@
 use std::{iter::Peekable, str::Chars};
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(PartialEq, Debug, Eq, Clone)]
 pub enum Token {
     Illegal,
     EOF,
-    Int(usize),
+    Int(i64),
     Identifier(String),
     Assign,
     Plus,
@@ -40,9 +40,9 @@ static KEYWORDS: phf::Map<&'static str, Token> = phf::phf_map! {
     "return" => Token::Return,
 };
 
+#[derive(Debug, Clone)]
 pub struct Lexer<'a> {
     pub chars: Peekable<Chars<'a>>,
-
 }
 impl<'a> Lexer<'a> {
     pub fn new(code: &'a str) -> Lexer<'a> {
@@ -82,13 +82,13 @@ impl<'a> Iterator for Lexer<'a> {
             match token {
                 '=' => {
                     if let Some(next_char) = self.peek() {
-                        if *next_char == '='{
+                        if *next_char == '=' {
                             self.read_char();
                             return Some(Token::Equal);
                         }
                     }
                     return Some(Token::Assign);
-                },
+                }
                 '+' => return Some(Token::Plus),
                 '(' => return Some(Token::LParen),
                 ')' => return Some(Token::RParen),
@@ -99,12 +99,12 @@ impl<'a> Iterator for Lexer<'a> {
                 '-' => return Some(Token::Minus),
                 '!' => {
                     if let Some(next_char) = self.peek() {
-                        if *next_char == '='{
+                        if *next_char == '=' {
                             self.read_char();
                             return Some(Token::NotEqual);
                         }
                     }
-                    return Some(Token::Bang)
+                    return Some(Token::Bang);
                 }
                 '/' => return Some(Token::Slash),
                 '*' => return Some(Token::Asterisk),
@@ -125,14 +125,13 @@ impl<'a> Iterator for Lexer<'a> {
                         let str = self.keep_reading(token, |c| c.is_digit(10));
                         let str = str.into_iter().collect::<String>();
                         return Some(Token::Int(
-                            str::parse::<usize>(&str).expect("this should always work"),
+                            str::parse::<i64>(&str).expect("this should always work"),
                         ));
                     }
                 }
             }
         }
         return None;
-
     }
 }
 
@@ -203,54 +202,57 @@ let result = add(five, ten);";
             Token::Identifier(String::from("ten")),
             Token::RParen,
             Token::Semicolon,
-
         ];
 
         let output = Lexer::new(input).into_iter().collect::<Vec<Token>>();
         assert_eq!(output, expected);
     }
-
-
-
 }
-    #[test]
-    fn test_lexer_2() {
-        let input = "!-/*5;
+#[test]
+fn test_lexer_2() {
+    let input = "!-/*5;
 5 < 10 > 5;";
-        let expected = vec![
-            Token::Bang,
-            Token::Minus,
-            Token::Slash,
-            Token::Asterisk,
-            Token::Int(5),
-            Token::Semicolon,
-            Token::Int(5),
-            Token::Lt,
-            Token::Int(10),
-            Token::Gt,
-            Token::Int(5),
-            Token::Semicolon,
+    let expected = vec![
+        Token::Bang,
+        Token::Minus,
+        Token::Slash,
+        Token::Asterisk,
+        Token::Int(5),
+        Token::Semicolon,
+        Token::Int(5),
+        Token::Lt,
+        Token::Int(10),
+        Token::Gt,
+        Token::Int(5),
+        Token::Semicolon,
+    ];
 
-        ];
-
-        let output = Lexer::new(input).into_iter().collect::<Vec<Token>>();
-        assert_eq!(output, expected);
-    }
-    #[test]
-    fn test_lexer_3() {
-        let input = "10 == 10;
+    let output = Lexer::new(input).into_iter().collect::<Vec<Token>>();
+    assert_eq!(output, expected);
+}
+#[test]
+fn test_lexer_3() {
+    let input = "10 == 10;
 10 != 9;";
-        let expected = vec![
-            Token::Int(10),
-            Token::Equal,
-            Token::Int(10),
-            Token::Semicolon,
-            Token::Int(10),
-            Token::NotEqual,
-            Token::Int(9),
-            Token::Semicolon,
-        ];
+    let expected = vec![
+        Token::Int(10),
+        Token::Equal,
+        Token::Int(10),
+        Token::Semicolon,
+        Token::Int(10),
+        Token::NotEqual,
+        Token::Int(9),
+        Token::Semicolon,
+    ];
 
-        let output = Lexer::new(input).into_iter().collect::<Vec<Token>>();
-        assert_eq!(output, expected);
-    }
+    let output = Lexer::new(input).into_iter().collect::<Vec<Token>>();
+    assert_eq!(output, expected);
+}
+#[test]
+fn test_lexer_4() {
+    let input = "return 5;";
+    let expected = vec![Token::Return, Token::Int(5), Token::Semicolon];
+
+    let output = Lexer::new(input).into_iter().collect::<Vec<Token>>();
+    assert_eq!(output, expected);
+}

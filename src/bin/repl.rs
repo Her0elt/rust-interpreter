@@ -13,9 +13,7 @@ fn main() -> Result<()> {
     loop {
         println!("{}", PROMPT);
         if let Some(Ok(ref line)) = stdin.lock().lines().next() {
-            for item in repl.line(line).iter() {
-                println!("{:?}", item);
-            }
+            println!("{:?}", repl.line(line));
         }
     }
 }
